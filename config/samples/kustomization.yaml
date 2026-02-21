@@ -1,0 +1,5 @@
+## Append samples of your project ##
+resources:
+- api-key.yaml
+- secrets_v1beta1_sakuracloudsecret.yaml
+# +kubebuilder:scaffold:manifestskustomizesamples

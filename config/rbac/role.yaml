@@ -1,0 +1,32 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: manager-role
+rules:
+- apiGroups:
+  - secrets.t-inagaki.net
+  resources:
+  - sakuracloudsecrets
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - secrets.t-inagaki.net
+  resources:
+  - sakuracloudsecrets/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - secrets.t-inagaki.net
+  resources:
+  - sakuracloudsecrets/status
+  verbs:
+  - get
+  - patch
+  - update
