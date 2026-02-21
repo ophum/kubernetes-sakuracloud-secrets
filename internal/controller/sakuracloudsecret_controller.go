@@ -57,6 +57,7 @@ type SakuraCloudSecretReconciler struct {
 // +kubebuilder:rbac:groups=secrets.t-inagaki.net,resources=sakuracloudsecrets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=secrets.t-inagaki.net,resources=sakuracloudsecrets/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=secrets.t-inagaki.net,resources=sakuracloudsecrets/finalizers,verbs=update
+// +kubebuilder:rbac:groups=core,resources=secrets,verbs=get;list;watch;create;update;patch
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -77,6 +78,10 @@ func (r *SakuraCloudSecretReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		}
 		log.Info("failed to get secret")
 		return ctrl.Result{}, err
+	}
+
+	if !s.DeletionTimestamp.IsZero() {
+		return ctrl.Result{}, nil
 	}
 
 	log.Info("reconcile secret",
