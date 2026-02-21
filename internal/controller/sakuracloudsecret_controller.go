@@ -44,6 +44,10 @@ import (
 	smv1 "github.com/sacloud/secretmanager-api-go/apis/v1"
 )
 
+const (
+	typeSyncSecret = "SyncSecret"
+)
+
 // SakuraCloudSecretReconciler reconciles a SakuraCloudSecret object
 type SakuraCloudSecretReconciler struct {
 	client.Client
@@ -81,6 +85,11 @@ func (r *SakuraCloudSecretReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		"currentVersion", s.Status.Version,
 	)
 
+	// FIXME: Validating ladmission webhookでやるのがよさそう
+	if err := r.validateFormat(s.Spec.Format); err != nil {
+		return ctrl.Result{}, err
+	}
+
 	var ksecret corev1.Secret
 	isNotFound := false
 	if err := r.Get(ctx, types.NamespacedName{
@@ -97,36 +106,21 @@ func (r *SakuraCloudSecretReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		}
 	}
 
-	var apiKey corev1.Secret
-	if err := r.Get(ctx, types.NamespacedName{
-		Namespace: s.Namespace,
-		Name:      s.Spec.APIKey.SecretName,
-	}, &apiKey); err != nil {
-		return ctrl.Result{}, err
-	}
-
-	accessToken, ok := apiKey.Data["accessToken"]
-	if !ok {
-		log.Info("data", "data", apiKey.Data)
-		return ctrl.Result{}, errors.New("accessToken required")
-	}
-	accessTokenSecret, ok := apiKey.Data["accessTokenSecret"]
-	if !ok {
-		return ctrl.Result{}, errors.New("accessToken required")
-	}
-
-	log.Info("apiKey", "accessToken", string(accessToken))
-	apiClient := &saclient.Client{}
-	apiClient.SetWith(saclient.WithBasicAuth(string(accessToken), string(accessTokenSecret)))
-	client, err := sm.NewClient(apiClient)
+	client, err := r.newSecretManagerClient(ctx, s.Namespace, s.Spec.APIKey.SecretName)
 	if err != nil {
-		return ctrl.Result{}, err
+		return ctrl.Result{}, nil
 	}
 
 	var version smv1.OptNilInt
 	if s.Spec.Version != nil {
 		version = smv1.NewOptNilInt(*s.Spec.Version)
 	}
+
+	log.Info("unveil secret",
+		"vaultResourceID", s.Spec.VaultResourceID,
+		"name", s.Spec.Name,
+		"version", s.Spec.Version,
+	)
 	unveiled, err := client.SecretmanagerVaultsSecretsUnveil(ctx, &smv1.WrappedUnveil{
 		Secret: smv1.Unveil{
 			Name:    s.Spec.Name,
@@ -142,7 +136,7 @@ func (r *SakuraCloudSecretReconciler) Reconcile(ctx context.Context, req ctrl.Re
 			switch resErr.StatusCode {
 			case 401, 403, 404, 500:
 				meta.SetStatusCondition(&s.Status.Conditions, metav1.Condition{
-					Type:    "SyncSecret",
+					Type:    typeSyncSecret,
 					Status:  metav1.ConditionFalse,
 					Reason:  "created",
 					Message: resErr.Error(),
@@ -161,21 +155,17 @@ func (r *SakuraCloudSecretReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 
 	var secretData map[string]string
+	var unmarshaler func([]byte, any) error
 	switch s.Spec.Format {
 	case "", "json":
-		if err := json.Unmarshal([]byte(unveiled.Secret.Value), &secretData); err != nil {
-			return ctrl.Result{
-				RequeueAfter: time.Minute,
-			}, err
-		}
+		unmarshaler = json.Unmarshal
 	case "yaml":
-		if err := yaml.Unmarshal([]byte(unveiled.Secret.Value), &secretData); err != nil {
-			return ctrl.Result{
-				RequeueAfter: time.Minute,
-			}, err
-		}
-	default:
-		return ctrl.Result{}, errors.New("invalid format")
+		unmarshaler = yaml.Unmarshal
+	}
+	if err := unmarshaler([]byte(unveiled.Secret.Value), &secretData); err != nil {
+		return ctrl.Result{
+			RequeueAfter: time.Minute,
+		}, err
 	}
 
 	data := map[string][]byte{}
@@ -208,7 +198,7 @@ func (r *SakuraCloudSecretReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 
 	meta.SetStatusCondition(&s.Status.Conditions, metav1.Condition{
-		Type:    "SyncSecret",
+		Type:    typeSyncSecret,
 		Status:  metav1.ConditionTrue,
 		Reason:  "synced",
 		Message: "secret synced",
@@ -218,7 +208,41 @@ func (r *SakuraCloudSecretReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	if err := r.Status().Update(ctx, &s); err != nil {
 		return ctrl.Result{}, err
 	}
+
 	return ctrl.Result{}, nil
+}
+
+func (r *SakuraCloudSecretReconciler) newSecretManagerClient(ctx context.Context, namespace, name string) (*smv1.Client, error) {
+	var apiKey corev1.Secret
+	if err := r.Get(ctx, types.NamespacedName{
+		Namespace: namespace,
+		Name:      name,
+	}, &apiKey); err != nil {
+		return nil, err
+	}
+
+	accessToken, ok := apiKey.Data["accessToken"]
+	if !ok {
+		return nil, errors.New("accessToken required")
+	}
+	accessTokenSecret, ok := apiKey.Data["accessTokenSecret"]
+	if !ok {
+		return nil, errors.New("accessToken required")
+	}
+
+	apiClient := &saclient.Client{}
+	apiClient.SetWith(saclient.WithBasicAuth(string(accessToken), string(accessTokenSecret)))
+	return sm.NewClient(apiClient)
+
+}
+
+func (r *SakuraCloudSecretReconciler) validateFormat(format string) error {
+	switch format {
+	case "", "json", "yaml":
+		return nil
+	default:
+		return errors.New("invalid format")
+	}
 }
 
 // SetupWithManager sets up the controller with the Manager.
