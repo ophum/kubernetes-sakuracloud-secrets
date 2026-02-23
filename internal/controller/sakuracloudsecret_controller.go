@@ -26,6 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
@@ -51,13 +52,15 @@ const (
 // SakuraCloudSecretReconciler reconciles a SakuraCloudSecret object
 type SakuraCloudSecretReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme   *runtime.Scheme
+	Recorder events.EventRecorder
 }
 
 // +kubebuilder:rbac:groups=secrets.t-inagaki.net,resources=sakuracloudsecrets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=secrets.t-inagaki.net,resources=sakuracloudsecrets/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=secrets.t-inagaki.net,resources=sakuracloudsecrets/finalizers,verbs=update
 // +kubebuilder:rbac:groups=core,resources=secrets,verbs=get;list;watch;create;update;patch
+// +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -138,6 +141,7 @@ func (r *SakuraCloudSecretReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		// NOTE: 明らかにリソースIDや認証情報が間違っている場合はConditionをFalseにして終了する
 		var resErr *validate.UnexpectedStatusCodeError
 		if errors.As(err, &resErr) {
+			r.Recorder.Eventf(&s, nil, corev1.EventTypeWarning, "UnveilFailed", "Unveil", "Failed to unveil secret from SakuraCloud: %d/%s, error=%s", s.Spec.VaultResourceID, s.Spec.Name, err.Error())
 			switch resErr.StatusCode {
 			case 401, 403, 404, 500:
 				meta.SetStatusCondition(&s.Status.Conditions, metav1.Condition{
@@ -168,6 +172,7 @@ func (r *SakuraCloudSecretReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		unmarshaler = yaml.Unmarshal
 	}
 	if err := unmarshaler([]byte(unveiled.Secret.Value), &secretData); err != nil {
+		r.Recorder.Eventf(&s, nil, corev1.EventTypeWarning, "UnmarshalFailed", "Unmarshal", "Failed to unmarshal data: %d/%s, error=%s", s.Spec.VaultResourceID, s.Spec.Name, err.Error())
 		return ctrl.Result{
 			RequeueAfter: time.Minute,
 		}, err
@@ -213,6 +218,7 @@ func (r *SakuraCloudSecretReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	if err := r.Status().Update(ctx, &s); err != nil {
 		return ctrl.Result{}, err
 	}
+	r.Recorder.Eventf(&s, nil, corev1.EventTypeNormal, "Synced", "Sync", "Successfully synced secret from SakuraCloud: %d/%s", s.Spec.VaultResourceID, s.Spec.Name)
 
 	return ctrl.Result{}, nil
 }
