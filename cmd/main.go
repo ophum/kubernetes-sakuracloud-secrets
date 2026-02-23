@@ -179,8 +179,9 @@ func main() {
 	}
 
 	if err := (&controller.SakuraCloudSecretReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorder("kubernetes-sakuracloud-secrets"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "SakuraCloudSecret")
 		os.Exit(1)
