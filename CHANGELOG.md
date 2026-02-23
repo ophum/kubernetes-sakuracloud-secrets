@@ -1,5 +1,8 @@
 # Changelog
 
+## [v0.0.6](https://github.com/ophum/kubernetes-sakuracloud-secrets/compare/v0.0.5...v0.0.6) - 2026-02-23
+- arm64のビルドを追加する by @ophum in https://github.com/ophum/kubernetes-sakuracloud-secrets/pull/14
+
 ## [v0.0.5](https://github.com/ophum/kubernetes-sakuracloud-secrets/compare/v0.0.4...v0.0.5) - 2026-02-23
 - イベントを記録する by @ophum in https://github.com/ophum/kubernetes-sakuracloud-secrets/pull/12
 
