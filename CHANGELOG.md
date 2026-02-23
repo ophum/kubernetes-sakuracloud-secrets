@@ -1,5 +1,8 @@
 # Changelog
 
+## [v0.0.7](https://github.com/ophum/kubernetes-sakuracloud-secrets/compare/v0.0.6...v0.0.7) - 2026-02-23
+- templateDataを設定している場合はテンプレートを展開する by @ophum in https://github.com/ophum/kubernetes-sakuracloud-secrets/pull/16
+
 ## [v0.0.6](https://github.com/ophum/kubernetes-sakuracloud-secrets/compare/v0.0.5...v0.0.6) - 2026-02-23
 - arm64のビルドを追加する by @ophum in https://github.com/ophum/kubernetes-sakuracloud-secrets/pull/14
 
