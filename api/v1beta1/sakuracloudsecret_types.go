@@ -40,6 +40,9 @@ type SakuraCloudSecretSpec struct {
 	Format string `json:"format"`
 
 	DestinationSecretName string `json:"destinationSecretName"`
+
+	// +optional
+	TemplateData map[string]string `json:"templateData,omitempty"`
 }
 
 type APIKeyRef struct {
