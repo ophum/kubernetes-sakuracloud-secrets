@@ -17,10 +17,12 @@ limitations under the License.
 package controller
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"strconv"
+	"text/template"
 	"time"
 
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -32,6 +34,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/ogen-go/ogen/validate"
+	"github.com/ophum/kubernetes-sakuracloud-secrets/api/v1beta1"
 	secretsv1beta1 "github.com/ophum/kubernetes-sakuracloud-secrets/api/v1beta1"
 	"github.com/sacloud/saclient-go"
 	"go.yaml.in/yaml/v3"
@@ -83,15 +86,16 @@ func (r *SakuraCloudSecretReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, err
 	}
 
+	log.Info("reconcile secret",
+		"vaultResourceID", s.Spec.VaultResourceID,
+		"specVersion", s.Spec.Version,
+		"currentVersion", s.Status.Version,
+		"deletionTimestamp", s.DeletionTimestamp,
+	)
+
 	if !s.DeletionTimestamp.IsZero() {
 		return ctrl.Result{}, nil
 	}
-
-	log.Info("reconcile secret",
-		"name", req.NamespacedName.String(),
-		"specVersion", s.Spec.Version,
-		"currentVersion", s.Status.Version,
-	)
 
 	// FIXME: Validating ladmission webhookでやるのがよさそう
 	if err := r.validateFormat(s.Spec.Format); err != nil {
@@ -125,8 +129,6 @@ func (r *SakuraCloudSecretReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 
 	log.Info("unveil secret",
-		"vaultResourceID", s.Spec.VaultResourceID,
-		"name", s.Spec.Name,
 		"version", s.Spec.Version,
 	)
 	unveiled, err := client.SecretmanagerVaultsSecretsUnveil(ctx, &smv1.WrappedUnveil{
@@ -147,7 +149,7 @@ func (r *SakuraCloudSecretReconciler) Reconcile(ctx context.Context, req ctrl.Re
 				meta.SetStatusCondition(&s.Status.Conditions, metav1.Condition{
 					Type:    typeSyncSecret,
 					Status:  metav1.ConditionFalse,
-					Reason:  "created",
+					Reason:  "synced",
 					Message: resErr.Error(),
 				})
 
@@ -162,8 +164,7 @@ func (r *SakuraCloudSecretReconciler) Reconcile(ctx context.Context, req ctrl.Re
 			RequeueAfter: time.Minute,
 		}, err
 	}
-
-	var secretData map[string]string
+	data := map[string][]byte{}
 	var unmarshaler func([]byte, any) error
 	switch s.Spec.Format {
 	case "", "json":
@@ -171,16 +172,55 @@ func (r *SakuraCloudSecretReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	case "yaml":
 		unmarshaler = yaml.Unmarshal
 	}
-	if err := unmarshaler([]byte(unveiled.Secret.Value), &secretData); err != nil {
-		r.Recorder.Eventf(&s, nil, corev1.EventTypeWarning, "UnmarshalFailed", "Unmarshal", "Failed to unmarshal data: %d/%s, error=%s", s.Spec.VaultResourceID, s.Spec.Name, err.Error())
-		return ctrl.Result{
-			RequeueAfter: time.Minute,
-		}, err
-	}
 
-	data := map[string][]byte{}
-	for k, v := range secretData {
-		data[k] = []byte(v)
+	if len(s.Spec.TemplateData) == 0 {
+		var secretData map[string]string
+		if err := unmarshaler([]byte(unveiled.Secret.Value), &secretData); err != nil {
+			r.Recorder.Eventf(&s, nil, corev1.EventTypeWarning, "UnmarshalFailed", "Unmarshal", "Failed to unmarshal data: %d/%s, error=%s", s.Spec.VaultResourceID, s.Spec.Name, err.Error())
+			meta.SetStatusCondition(&s.Status.Conditions, metav1.Condition{
+				Type:    typeSyncSecret,
+				Status:  metav1.ConditionFalse,
+				Reason:  "synced",
+				Message: err.Error(),
+			})
+			if err := r.Status().Update(ctx, &s); err != nil {
+				return ctrl.Result{}, err
+			}
+			return ctrl.Result{}, nil
+		}
+		for k, v := range secretData {
+			data[k] = []byte(v)
+		}
+	} else {
+		var secretData map[string]any
+		if err := unmarshaler([]byte(unveiled.Secret.Value), &secretData); err != nil {
+			r.Recorder.Eventf(&s, nil, corev1.EventTypeWarning, "UnmarshalFailed", "Unmarshal", "Failed to unmarshal data: %d/%s, error=%s", s.Spec.VaultResourceID, s.Spec.Name, err.Error())
+			meta.SetStatusCondition(&s.Status.Conditions, metav1.Condition{
+				Type:    typeSyncSecret,
+				Status:  metav1.ConditionFalse,
+				Reason:  "synced",
+				Message: err.Error(),
+			})
+			if err := r.Status().Update(ctx, &s); err != nil {
+				return ctrl.Result{}, err
+			}
+			return ctrl.Result{}, nil
+		}
+
+		data, err = r.renderTemplateData(ctx, &s, secretData)
+		if err != nil {
+			r.Recorder.Eventf(&s, nil, corev1.EventTypeWarning, "RenderTemplateFailed", "RenderTemplate", "Failed to parse template: %d/%s, error=%s", s.Spec.VaultResourceID, s.Spec.Name, err.Error())
+			meta.SetStatusCondition(&s.Status.Conditions, metav1.Condition{
+				Type:    typeSyncSecret,
+				Status:  metav1.ConditionFalse,
+				Reason:  "synced",
+				Message: err.Error(),
+			})
+			if err := r.Status().Update(ctx, &s); err != nil {
+				return ctrl.Result{}, err
+			}
+			return ctrl.Result{}, nil
+		}
 	}
 
 	if isNotFound {
@@ -224,6 +264,7 @@ func (r *SakuraCloudSecretReconciler) Reconcile(ctx context.Context, req ctrl.Re
 }
 
 func (r *SakuraCloudSecretReconciler) newSecretManagerClient(ctx context.Context, namespace, name string) (*smv1.Client, error) {
+	log := logf.FromContext(ctx)
 	var apiKey corev1.Secret
 	if err := r.Get(ctx, types.NamespacedName{
 		Namespace: namespace,
@@ -241,6 +282,7 @@ func (r *SakuraCloudSecretReconciler) newSecretManagerClient(ctx context.Context
 		return nil, errors.New("accessToken required")
 	}
 
+	log.Info("sakuracloud credentials loaded", "accessToken", string(accessToken))
 	apiClient := &saclient.Client{}
 	apiClient.SetWith(saclient.WithBasicAuth(string(accessToken), string(accessTokenSecret)))
 	return sm.NewClient(apiClient)
@@ -254,6 +296,28 @@ func (r *SakuraCloudSecretReconciler) validateFormat(format string) error {
 	default:
 		return errors.New("invalid format")
 	}
+}
+
+func (r *SakuraCloudSecretReconciler) renderTemplateData(ctx context.Context, s *v1beta1.SakuraCloudSecret, secretData map[string]any) (map[string][]byte, error) {
+	data := map[string][]byte{}
+	for k, v := range s.Spec.TemplateData {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+
+		templ, err := template.New("").Parse(v)
+		if err != nil {
+			return nil, err
+		}
+		b := bytes.Buffer{}
+		if err := templ.Execute(&b, secretData); err != nil {
+			return nil, err
+		}
+		data[k] = b.Bytes()
+	}
+	return data, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
