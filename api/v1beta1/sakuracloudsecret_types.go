@@ -48,6 +48,7 @@ type SakuraCloudSecretSpec struct {
 	// Type is the type of the secret to create. If specified, it takes precedence.
 	// If omitted, the controller detects the appropriate Secret type from the data keys.
 	// +optional
+	// +kubebuilder:validation:Enum=Opaque;kubernetes.io/service-account-token;kubernetes.io/dockercfg;kubernetes.io/dockerconfigjson;kubernetes.io/basic-auth;kubernetes.io/ssh-auth;kubernetes.io/tls;bootstrap.kubernetes.io/token
 	Type corev1.SecretType `json:"type,omitempty"`
 }
 
