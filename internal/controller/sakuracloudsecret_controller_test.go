@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"testing"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -28,7 +29,137 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	secretsv1beta1 "github.com/ophum/kubernetes-sakuracloud-secrets/api/v1beta1"
+	corev1 "k8s.io/api/core/v1"
 )
+
+func TestDetectSecretType(t *testing.T) {
+	tests := []struct {
+		name string
+		data map[string][]byte
+		want corev1.SecretType
+	}{
+		{
+			name: "dockerconfigjson",
+			data: map[string][]byte{
+				corev1.DockerConfigJsonKey: []byte(`{"auths":{"example.com":{"auth":"xxx"}}}`),
+			},
+			want: corev1.SecretTypeDockerConfigJson,
+		},
+		{
+			name: "dockercfg",
+			data: map[string][]byte{
+				corev1.DockerConfigKey: []byte(`{"example.com":{"auth":"xxx"}}`),
+			},
+			want: corev1.SecretTypeDockercfg,
+		},
+		{
+			name: "tls",
+			data: map[string][]byte{
+				corev1.TLSCertKey:       []byte("cert"),
+				corev1.TLSPrivateKeyKey: []byte("key"),
+			},
+			want: corev1.SecretTypeTLS,
+		},
+		{
+			name: "opaque",
+			data: map[string][]byte{
+				"foo": []byte("bar"),
+			},
+			want: corev1.SecretTypeOpaque,
+		},
+		{
+			name: "tls-cert-only",
+			data: map[string][]byte{
+				corev1.TLSCertKey: []byte("cert"),
+			},
+			want: corev1.SecretTypeOpaque,
+		},
+		{
+			name: "tls-key-only",
+			data: map[string][]byte{
+				corev1.TLSPrivateKeyKey: []byte("key"),
+			},
+			want: corev1.SecretTypeOpaque,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := detectSecretType(tt.data)
+			if got != tt.want {
+				t.Errorf("got=%s want=%s", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSelectSecretType(t *testing.T) {
+	tests := []struct {
+		name     string
+		specType corev1.SecretType
+		data     map[string][]byte
+		want     corev1.SecretType
+	}{
+		{
+			name:     "spec type takes precedence - Opaque",
+			specType: corev1.SecretTypeOpaque,
+			data: map[string][]byte{
+				corev1.DockerConfigJsonKey: []byte(`{"auths":{"example.com":{"auth":"xxx"}}}`),
+			},
+			want: corev1.SecretTypeOpaque,
+		},
+		{
+			name:     "spec type takes precedence - TLS",
+			specType: corev1.SecretTypeTLS,
+			data: map[string][]byte{
+				"foo": []byte("bar"),
+			},
+			want: corev1.SecretTypeTLS,
+		},
+		{
+			name:     "spec type takes precedence - DockerConfigJson",
+			specType: corev1.SecretTypeDockerConfigJson,
+			data: map[string][]byte{
+				"foo": []byte("bar"),
+			},
+			want: corev1.SecretTypeDockerConfigJson,
+		},
+		{
+			name:     "empty spec type uses auto-detect - dockerconfigjson",
+			specType: "",
+			data: map[string][]byte{
+				corev1.DockerConfigJsonKey: []byte(`{"auths":{"example.com":{"auth":"xxx"}}}`),
+			},
+			want: corev1.SecretTypeDockerConfigJson,
+		},
+		{
+			name:     "empty spec type uses auto-detect - tls",
+			specType: "",
+			data: map[string][]byte{
+				corev1.TLSCertKey:       []byte("cert"),
+				corev1.TLSPrivateKeyKey: []byte("key"),
+			},
+			want: corev1.SecretTypeTLS,
+		},
+		{
+			name:     "empty spec type uses auto-detect - opaque",
+			specType: "",
+			data: map[string][]byte{
+				"foo": []byte("bar"),
+			},
+			want: corev1.SecretTypeOpaque,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := selectSecretType(tt.specType, tt.data)
+			if got != tt.want {
+				t.Errorf("got=%s want=%s", got, tt.want)
+			}
+		})
+	}
+}
 
 var _ = Describe("SakuraCloudSecret Controller", func() {
 	Context("When reconciling a resource", func() {

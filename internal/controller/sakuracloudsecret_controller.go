@@ -113,9 +113,15 @@ func (r *SakuraCloudSecretReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		}
 		isNotFound = true
 	} else {
-		if s.Spec.Version != nil && *s.Spec.Version == s.Status.Version {
+		// Determine desired type first
+		desiredType := selectSecretType(s.Spec.Type, ksecret.Data)
+
+		// Skip reconciliation only if version hasn't changed and type matches
+		if s.Spec.Version != nil && *s.Spec.Version == s.Status.Version && ksecret.Type == desiredType {
+			// No changes needed
 			return ctrl.Result{}, nil
 		}
+		// Type mismatch or version changed - proceed to update
 	}
 
 	client, err := r.newSecretManagerClient(ctx, s.Namespace, s.Spec.APIKey.SecretName)
@@ -224,11 +230,13 @@ func (r *SakuraCloudSecretReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 
 	if isNotFound {
+		secretType := selectSecretType(s.Spec.Type, data)
 		ksecret = corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      s.Spec.DestinationSecretName,
 				Namespace: s.Namespace,
 			},
+			Type: secretType,
 			Data: data,
 		}
 		if err := ctrl.SetControllerReference(&s, &ksecret, r.Scheme); err != nil {
@@ -238,6 +246,7 @@ func (r *SakuraCloudSecretReconciler) Reconcile(ctx context.Context, req ctrl.Re
 			return ctrl.Result{}, err
 		}
 	} else {
+		ksecret.Type = selectSecretType(s.Spec.Type, data)
 		ksecret.Data = data
 		if err := ctrl.SetControllerReference(&s, &ksecret, r.Scheme); err != nil {
 			return ctrl.Result{}, err
@@ -296,6 +305,30 @@ func (r *SakuraCloudSecretReconciler) validateFormat(format string) error {
 	default:
 		return errors.New("invalid format")
 	}
+}
+
+// detectSecretType determines the appropriate Secret type based on the data keys
+func detectSecretType(data map[string][]byte) corev1.SecretType {
+	if _, ok := data[corev1.DockerConfigJsonKey]; ok {
+		return corev1.SecretTypeDockerConfigJson
+	}
+	if _, ok := data[corev1.DockerConfigKey]; ok {
+		return corev1.SecretTypeDockercfg
+	}
+	if _, ok := data[corev1.TLSCertKey]; ok {
+		if _, ok := data[corev1.TLSPrivateKeyKey]; ok {
+			return corev1.SecretTypeTLS
+		}
+	}
+	return corev1.SecretTypeOpaque
+}
+
+// selectSecretType returns the specified type if provided, otherwise detects from data
+func selectSecretType(specType corev1.SecretType, data map[string][]byte) corev1.SecretType {
+	if specType != "" {
+		return specType
+	}
+	return detectSecretType(data)
 }
 
 func (r *SakuraCloudSecretReconciler) renderTemplateData(ctx context.Context, s *v1beta1.SakuraCloudSecret, secretData map[string]any) (map[string][]byte, error) {
