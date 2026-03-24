@@ -161,6 +161,84 @@ func TestSelectSecretType(t *testing.T) {
 	}
 }
 
+func TestSetSecretMetadata(t *testing.T) {
+	tests := []struct {
+		name                string
+		specLabels          map[string]string
+		specAnnotations     map[string]string
+		existingLabels      map[string]string
+		existingAnnotations map[string]string
+		wantLabels          map[string]string
+		wantAnnotations     map[string]string
+	}{
+		{
+			name:            "new secret with labels and annotations",
+			specLabels:      map[string]string{"app": "myapp", "env": "prod"},
+			specAnnotations: map[string]string{"managed-by": "controller"},
+			wantLabels:      map[string]string{"app": "myapp", "env": "prod"},
+			wantAnnotations: map[string]string{"managed-by": "controller"},
+		},
+		{
+			name:                "update secret replaces labels and annotations",
+			specLabels:          map[string]string{"app": "myapp", "env": "prod"},
+			specAnnotations:     map[string]string{"managed-by": "controller"},
+			existingLabels:      map[string]string{"old": "value", "keep": "me"},
+			existingAnnotations: map[string]string{"old": "annotation"},
+			wantLabels:          map[string]string{"app": "myapp", "env": "prod"},
+			wantAnnotations:     map[string]string{"managed-by": "controller"},
+		},
+		{
+			name:                "empty spec replaces with nil maps",
+			specLabels:          map[string]string{},
+			specAnnotations:     map[string]string{},
+			existingLabels:      map[string]string{"keep": "me"},
+			existingAnnotations: map[string]string{"keep": "annotation"},
+			wantLabels:          nil,
+			wantAnnotations:     nil,
+		},
+		{
+			name:                "nil spec maps",
+			existingLabels:      map[string]string{"keep": "me"},
+			existingAnnotations: map[string]string{"keep": "annotation"},
+			wantLabels:          nil,
+			wantAnnotations:     nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			secret := &corev1.Secret{}
+			if tt.existingLabels != nil {
+				secret.Labels = tt.existingLabels
+			}
+			if tt.existingAnnotations != nil {
+				secret.Annotations = tt.existingAnnotations
+			}
+
+			// Call the production helper function
+			setSecretMetadata(secret, tt.specLabels, tt.specAnnotations)
+
+			// Helper function to compare maps
+			assertMapEquals := func(t *testing.T, got, want map[string]string, name string) {
+				t.Helper()
+				if len(got) != len(want) {
+					t.Errorf("%s length = %d, want %d (got = %v, want = %v)", name, len(got), len(want), got, want)
+					return
+				}
+				for k, wantV := range want {
+					if gotV, ok := got[k]; !ok || gotV != wantV {
+						t.Errorf("%s[%q] = %q, want %q (got = %v, want = %v)", name, k, gotV, wantV, got, want)
+					}
+				}
+			}
+
+			// Compare labels and annotations
+			assertMapEquals(t, secret.Labels, tt.wantLabels, "Labels")
+			assertMapEquals(t, secret.Annotations, tt.wantAnnotations, "Annotations")
+		})
+	}
+}
+
 var _ = Describe("SakuraCloudSecret Controller", func() {
 	Context("When reconciling a resource", func() {
 		const resourceName = "test-resource"

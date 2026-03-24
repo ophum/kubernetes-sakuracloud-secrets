@@ -21,6 +21,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"strconv"
 	"text/template"
 	"time"
@@ -116,12 +117,28 @@ func (r *SakuraCloudSecretReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		// Determine desired type first
 		desiredType := selectSecretType(s.Spec.Type, ksecret.Data)
 
-		// Skip reconciliation only if version hasn't changed and type matches
+		// Check if labels or annotations need to be updated
+		needsUpdate := !maps.Equal(s.Spec.Labels, ksecret.Labels) || !maps.Equal(s.Spec.Annotations, ksecret.Annotations)
+
+		// If only metadata (labels/annotations) needs to be updated while version and type are unchanged,
+		// update the existing Secret without calling SakuraCloud Secret Manager.
 		if s.Spec.Version != nil && *s.Spec.Version == s.Status.Version && ksecret.Type == desiredType {
-			// No changes needed
+			if needsUpdate {
+				if s.Spec.Labels != nil {
+					ksecret.Labels = s.Spec.Labels
+				}
+				if s.Spec.Annotations != nil {
+					ksecret.Annotations = s.Spec.Annotations
+				}
+				if err := r.Update(ctx, &ksecret); err != nil {
+					return ctrl.Result{}, err
+				}
+				return ctrl.Result{}, nil
+			}
+			// No changes needed - skip reconciliation
 			return ctrl.Result{}, nil
 		}
-		// Type mismatch or version changed - proceed to update
+		// Type mismatch, version changed, or data needs update - proceed to unveil and update
 	}
 
 	client, err := r.newSecretManagerClient(ctx, s.Namespace, s.Spec.APIKey.SecretName)
@@ -239,6 +256,8 @@ func (r *SakuraCloudSecretReconciler) Reconcile(ctx context.Context, req ctrl.Re
 			Type: secretType,
 			Data: data,
 		}
+		// Set labels and annotations before creating the secret
+		setSecretMetadata(&ksecret, s.Spec.Labels, s.Spec.Annotations)
 		if err := ctrl.SetControllerReference(&s, &ksecret, r.Scheme); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -248,6 +267,8 @@ func (r *SakuraCloudSecretReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	} else {
 		ksecret.Type = selectSecretType(s.Spec.Type, data)
 		ksecret.Data = data
+		// Set labels and annotations before updating the secret
+		setSecretMetadata(&ksecret, s.Spec.Labels, s.Spec.Annotations)
 		if err := ctrl.SetControllerReference(&s, &ksecret, r.Scheme); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -329,6 +350,24 @@ func selectSecretType(specType corev1.SecretType, data map[string][]byte) corev1
 		return specType
 	}
 	return detectSecretType(data)
+}
+
+// setSecretMetadata copies labels and annotations from spec to the secret.
+// It creates new maps to avoid sharing references with the CR object.
+func setSecretMetadata(secret *corev1.Secret, labels, annotations map[string]string) {
+	// Use maps.Clone for cleaner implementation (Go 1.21+)
+	if len(labels) > 0 {
+		secret.Labels = maps.Clone(labels)
+	} else {
+		secret.Labels = nil
+	}
+
+	// Replace annotations with a new map
+	if len(annotations) > 0 {
+		secret.Annotations = maps.Clone(annotations)
+	} else {
+		secret.Annotations = nil
+	}
 }
 
 func (r *SakuraCloudSecretReconciler) renderTemplateData(ctx context.Context, s *v1beta1.SakuraCloudSecret, secretData map[string]any) (map[string][]byte, error) {

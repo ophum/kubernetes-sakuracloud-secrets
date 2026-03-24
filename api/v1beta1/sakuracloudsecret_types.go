@@ -50,6 +50,14 @@ type SakuraCloudSecretSpec struct {
 	// +optional
 	// +kubebuilder:validation:Enum=Opaque;kubernetes.io/service-account-token;kubernetes.io/dockercfg;kubernetes.io/dockerconfigjson;kubernetes.io/basic-auth;kubernetes.io/ssh-auth;kubernetes.io/tls;bootstrap.kubernetes.io/token
 	Type corev1.SecretType `json:"type,omitempty"`
+
+	// Labels are labels that will be applied to the generated Secret.
+	// +optional
+	Labels map[string]string `json:"labels,omitempty"`
+
+	// Annotations are annotations that will be applied to the generated Secret.
+	// +optional
+	Annotations map[string]string `json:"annotations,omitempty"`
 }
 
 type APIKeyRef struct {
