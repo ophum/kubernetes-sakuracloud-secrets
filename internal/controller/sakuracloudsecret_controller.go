@@ -124,12 +124,8 @@ func (r *SakuraCloudSecretReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		// update the existing Secret without calling SakuraCloud Secret Manager.
 		if s.Spec.Version != nil && *s.Spec.Version == s.Status.Version && ksecret.Type == desiredType {
 			if needsUpdate {
-				if s.Spec.Labels != nil {
-					ksecret.Labels = s.Spec.Labels
-				}
-				if s.Spec.Annotations != nil {
-					ksecret.Annotations = s.Spec.Annotations
-				}
+				// Use centralized helper to update or clear metadata and avoid map aliasing.
+				setSecretMetadata(&ksecret, s.Spec.Labels, s.Spec.Annotations)
 				if err := r.Update(ctx, &ksecret); err != nil {
 					return ctrl.Result{}, err
 				}

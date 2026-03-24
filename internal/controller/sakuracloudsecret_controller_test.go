@@ -221,6 +221,11 @@ func TestSetSecretMetadata(t *testing.T) {
 			// Helper function to compare maps
 			assertMapEquals := func(t *testing.T, got, want map[string]string, name string) {
 				t.Helper()
+				// Explicitly check nil vs empty map to ensure they are treated differently
+				if (got == nil) != (want == nil) {
+					t.Errorf("%s nil mismatch: gotIsNil=%v, wantIsNil=%v (got = %v, want = %v)", name, got == nil, want == nil, got, want)
+					return
+				}
 				if len(got) != len(want) {
 					t.Errorf("%s length = %d, want %d (got = %v, want = %v)", name, len(got), len(want), got, want)
 					return
